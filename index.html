@@ -790,8 +790,10 @@
     window.navigator.standalone === true ||
     window.matchMedia("(display-mode: standalone)").matches ||
     window.matchMedia("(display-mode: fullscreen)").matches;
-  // In Safari the first tap goes full screen; after that, taps open the settings.
-  const tapGoesFullscreen = () => canFullscreen && !fullscreenEl() && !launchedFromHomeScreen();
+  // The first tap asks for full screen; the next tap opens the settings even if the browser never answered.
+  // Leaving full screen re-arms it, so a tap puts the sign back in full screen.
+  let fullscreenTried = false;
+  const tapGoesFullscreen = () => canFullscreen && !fullscreenTried && !fullscreenEl() && !launchedFromHomeScreen();
 
   async function enterFullscreen() {
     const request = root.requestFullscreen || root.webkitRequestFullscreen;
@@ -806,20 +808,19 @@
   }
 
   fsBtn.hidden = !canFullscreen;
-  fsBtn.addEventListener("click", async () => {
-    try {
-      if (fullscreenEl()) {
-        await exitFullscreen();
-      } else {
-        await enterFullscreen();
-        closeSheet();
-      }
-    } catch (e) {
+  fsBtn.addEventListener("click", () => {
+    const refused = () => {
       note.textContent = "This browser didn't allow full screen. Add the page to your Home Screen to open it with no bars.";
+    };
+    if (fullscreenEl()) {
+      exitFullscreen().catch(refused);
+    } else {
+      enterFullscreen().then(closeSheet, refused);
     }
   });
 
   function onFullscreenChange() {
+    if (!fullscreenEl()) fullscreenTried = false;
     fsBtn.textContent = fullscreenEl() ? "Exit full screen" : "Full screen";
     queueLayout();
     keepAwake();
@@ -839,12 +840,14 @@
 
   /* ---------- taps and keys ---------- */
 
-  stage.addEventListener("click", async () => {
+  stage.addEventListener("click", () => {
     keepAwake();
     if (sheetOpen) { closeSheet(); return; }
     if (tapGoesFullscreen()) {
+      fullscreenTried = true;
       hideHint();
-      try { await enterFullscreen(); return; } catch (e) { /* not allowed here: fall through to settings */ }
+      enterFullscreen().catch(openSheet); // not allowed here: show the settings instead
+      return;
     }
     openSheet();
   });
