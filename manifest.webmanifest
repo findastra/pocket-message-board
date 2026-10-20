@@ -1,0 +1,14 @@
+{
+  "name": "LED Message Board",
+  "short_name": "LED Message Board",
+  "description": "A full-screen scrolling LED sign: neon green board, black letters.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#39ff14",
+  "theme_color": "#39ff14",
+  "icons": [
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
