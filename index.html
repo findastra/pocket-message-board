@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>LED Message Board</title>
-<meta name="description" content="A full-screen scrolling LED sign for the iPad: neon green board, black letters you can read from the street.">
+<title>Pocket Message Board</title>
+<meta name="description" content="A scrolling LED sign for any screen: neon green board, big black letters you can read from the street. Fills a phone, tablet or computer window and turns with it.">
 <meta name="theme-color" content="#39ff14">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="LED Message Board">
+<meta name="apple-mobile-web-app-title" content="Pocket Message Board">
 <link rel="apple-touch-icon" href="icon-512.png">
 <link rel="icon" type="image/png" href="icon-512.png">
 <link rel="manifest" href="manifest.webmanifest">
@@ -307,7 +307,7 @@
 <div id="sheet" class="sheet" aria-hidden="true">
   <form id="controls" class="sheet-inner" aria-label="Sign settings" autocomplete="off">
     <div class="sheet-head">
-      <h1 class="brand">LED Message Board</h1>
+      <h1 class="brand">Pocket Message Board</h1>
       <button type="submit" class="btn btn-primary" id="done">Show sign</button>
     </div>
 
@@ -347,6 +347,7 @@
     <div class="sheet-foot">
       <button type="button" class="btn" id="fullscreen">Full screen</button>
       <button type="button" class="btn btn-quiet" id="reset">Restore defaults</button>
+      <p id="homeScreenTip" class="note" hidden>To fill the whole screen on this phone, add the page to your Home Screen (Share, then Add to Home Screen) and open it from the new icon.</p>
       <p id="note" class="note" role="status"></p>
     </div>
   </form>
@@ -357,7 +358,9 @@
   "use strict";
 
   const DEFAULTS = Object.freeze({ message: "Testing 1, 2, 3", speed: 5, size: 5, board: "#39ff14", ink: "#000000" });
-  const STORE_KEY = "led-message-board:v2";
+  const STORE_KEY = "pocket-message-board:v1";
+  const OLD_STORE_KEY = "led-message-board:v2"; // the same site's earlier name: its saved message carries over
+  const MAX_CANVAS_PIXELS = 16000000;  // iOS Safari refuses canvases above about 16.7 million pixels
 
   const TEXT_ROWS = 20;         // dot rows a letter is traced into: 1 above capitals, 14 of capitals, 5 for descenders
   const CAP_ROWS = 14;          // capital letter height in dots
@@ -407,7 +410,7 @@
   function loadSettings() {
     const s = { ...DEFAULTS };
     let saved = null;
-    try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); } catch (e) { saved = null; }
+    try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || localStorage.getItem(OLD_STORE_KEY) || "null"); } catch (e) { saved = null; }
     if (saved && typeof saved === "object") {
       if (typeof saved.message === "string") s.message = saved.message.slice(0, 200);
       if (inRange(saved.speed, 1, LETTERS_PER_SECOND.length)) s.speed = saved.speed;
@@ -549,23 +552,39 @@
   const gapCols = () => Math.round(letterCols * 1.5);
   const cycleCols = () => bits.cols + gapCols();
 
-  // Sizes the dots so the rows the message uses fill the chosen share of the panel's height.
+  // The notch and home-bar margins (all 0 on most screens), read from CSS env() through a hidden probe.
+  const insetProbe = document.createElement("div");
+  insetProbe.setAttribute("aria-hidden", "true");
+  insetProbe.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;"
+    + "padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)";
+  document.body.appendChild(insetProbe);
+  function safeInsets() {
+    const cs = getComputedStyle(insetProbe);
+    return { top: parseFloat(cs.paddingTop) || 0, right: parseFloat(cs.paddingRight) || 0,
+      bottom: parseFloat(cs.paddingBottom) || 0, left: parseFloat(cs.paddingLeft) || 0 };
+  }
+
+  // Sizes the dots so the rows the message uses fill the chosen share of the panel's height. The sign's board color
+  // reaches every edge; its dots stay clear of a notch or home bar.
   function layoutBoard(b) {
     const w = b.dotsCv.clientWidth;
     const h = b.dotsCv.clientHeight;
     if (!w || !h) { b.cols = 0; return; }
     b.W = w; b.H = h;
-    b.dpr = Math.min(window.devicePixelRatio || 1, 3);
+    // The screen's own sharpness, at most 3, and never more pixels than a phone's browser will draw.
+    b.dpr = Math.max(0.25, Math.min(window.devicePixelRatio || 1, 3, Math.sqrt(MAX_CANVAS_PIXELS / (w * h))));
 
+    const safe = b.fillsScreen ? safeInsets() : { top: 0, right: 0, bottom: 0, left: 0 };
+    const aw = Math.max(1, w - safe.left - safe.right), ah = Math.max(1, h - safe.top - safe.bottom);
     const used = bits.bottom - bits.top + 1;
     const share = b.fillsScreen ? SIZES[settings.size - 1] : 1;
-    let pitch = (h * share) / (used + 1); // +1 leaves half a dot row of board above and below
-    if (b.fillsScreen) pitch = Math.min(pitch, w / (letterCols * MIN_LETTERS_ACROSS));
+    let pitch = (ah * share) / (used + 1); // +1 leaves half a dot row of board above and below
+    if (b.fillsScreen) pitch = Math.min(pitch, aw / (letterCols * MIN_LETTERS_ACROSS));
     b.pitch = pitch;
-    b.cols = Math.max(1, Math.floor(w / pitch + 1e-6));
-    b.rows = Math.max(1, Math.floor(h / pitch + 1e-6));
-    b.ox = (w - b.cols * pitch) / 2;
-    b.oy = (h - b.rows * pitch) / 2;
+    b.cols = Math.max(1, Math.floor(aw / pitch + 1e-6));
+    b.rows = Math.max(1, Math.floor(ah / pitch + 1e-6));
+    b.ox = safe.left + (aw - b.cols * pitch) / 2;
+    b.oy = safe.top + (ah - b.rows * pitch) / 2;
     b.textTop = Math.floor((b.rows - used) / 2) - bits.top;
 
     const cw = Math.round(w * b.dpr);
@@ -808,6 +827,8 @@
   }
 
   fsBtn.hidden = !canFullscreen;
+  // iPhone Safari has no full screen for a page: there, Add to Home Screen is the way to lose the browser's bars.
+  $("homeScreenTip").hidden = canFullscreen || launchedFromHomeScreen();
   fsBtn.addEventListener("click", () => {
     const refused = () => {
       note.textContent = "This browser didn't allow full screen. Add the page to your Home Screen to open it with no bars.";
@@ -856,6 +877,11 @@
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && sheetOpen) closeSheet();
+    // On a computer, F puts the sign in full screen and takes it out again (Escape also leaves full screen).
+    if ((e.key === "f" || e.key === "F") && !sheetOpen && canFullscreen && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (fullscreenEl()) exitFullscreen().catch(() => {}); else enterFullscreen().catch(() => {});
+    }
   });
 
   form.addEventListener("submit", (e) => {
@@ -931,6 +957,9 @@
   }
   window.addEventListener("resize", queueLayout);
   window.addEventListener("orientationchange", queueLayout);
+  // Phone browsers show and hide their own bars without a window resize; these catch that and every turn.
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", queueLayout);
+  if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener("change", queueLayout);
 
   measureFont();
   syncForm();
@@ -940,9 +969,11 @@
   if (location.hash === "#settings") {
     openSheet();
   } else {
+    // "Tap" on a touch screen, "Click" with a mouse.
+    const verb = window.matchMedia && window.matchMedia("(pointer: coarse)").matches ? "Tap" : "Click";
     hint.textContent = tapGoesFullscreen()
-      ? "Tap for full screen. Tap again to change the message."
-      : "Tap the sign to change the message.";
+      ? `${verb} for full screen. ${verb} again to change the message.`
+      : `${verb} the sign to change the message.`;
     hintTimer = setTimeout(hideHint, 6000);
   }
   keepAwake();

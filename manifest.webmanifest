@@ -1,7 +1,7 @@
 {
-  "name": "LED Message Board",
-  "short_name": "LED Message Board",
-  "description": "A full-screen scrolling LED sign: neon green board, black letters.",
+  "name": "Pocket Message Board",
+  "short_name": "Pocket Message Board",
+  "description": "A scrolling LED sign for any screen: neon green board, big black letters.",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",
