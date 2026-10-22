@@ -24,7 +24,7 @@ The device remembers the last message, colors, speed and size you set (in that b
 ## How it was checked
 
 With Platform Platypus's `fit-check` and `device-shots` tools (Mirror Pool,
-[findastra/platform-platypus](https://github.com/findastra/platform-platypus)): every phone, iPad and computer window
+findastra/platform-platypus, a private repo): every phone, iPad and computer window
 in its device list, upright and on its side, loaded fresh and turned or resized live. A headless browser pretending to
 be a device is not the device: the last check is always the real phone or iPad.
 
