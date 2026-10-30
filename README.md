@@ -47,3 +47,7 @@ The device remembers the last message, colors, speed and size you set (in that b
 
 1. Built with Claude Opus 5.5, from 2026-10-19.
 2. The picture above is a screenshot of the live sign, 2026-10-29.
+
+## License
+
+MIT for the code, see [LICENSE](LICENSE). Pictures and art stay Astra's.
