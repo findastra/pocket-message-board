@@ -318,7 +318,23 @@
     border-radius: 12px;
     cursor: pointer;
   }
-  .spooky-item[aria-pressed="true"] { border-color: #00f0ff; color: #00f0ff; }
+  .spooky-item[aria-pressed="false"] { color: var(--muted); }
+  .spooky-item[aria-pressed="true"] { border-color: #00f0ff; }
+  .spooky-check {
+    flex: none;
+    align-self: center;
+    width: 22px;
+    height: 22px;
+    box-sizing: border-box;
+    border: 2px solid #5a5462;
+    border-radius: 6px;
+    font: 700 15px/18px var(--font-ui);
+    text-align: center;
+    color: transparent;
+  }
+  .spooky-item[aria-pressed="true"] .spooky-check { background: #00f0ff; border-color: #00f0ff; color: #0b0c0a; }
+  .spooky-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .spooky-count { font: 600 15px/1.2 var(--font-ui); color: var(--text); font-variant-numeric: tabular-nums; }
   .spooky-num { min-width: 2ch; font-variant-numeric: tabular-nums; color: #00f0ff; }
   .mode-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
   .btn-sos { color: #ff2b2b; border-color: #ff2b2b; background: transparent; }
@@ -326,6 +342,7 @@
   .btn-sos[aria-pressed="true"] { background: #ff2b2b; }
   .btn-spooky[aria-pressed="true"] { background: #00f0ff; }
   .btn-play { color: #0b0c0a; background: #00f0ff; border-color: #00f0ff; }
+  .btn-play:disabled { opacity: 0.4; cursor: default; }
   .spooky-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .spooky button:focus-visible { outline: 2px solid #00f0ff; outline-offset: 2px; }
 
@@ -401,11 +418,16 @@
     <div class="sheet-head">
       <h2 class="brand">Halloween message board</h2>
       <div class="spooky-actions">
-        <button type="button" class="btn btn-play" id="playSpooky">▶ Play all</button>
+        <button type="button" class="btn btn-play" id="playSpooky">▶ Play</button>
         <button type="button" class="btn" id="closeSpooky">Back</button>
       </div>
     </div>
-    <p class="spooky-intro">Play all scrolls through every message in a shuffled order, then shuffles again, with no message shown twice in a row. Or tap one message to show just that one.</p>
+    <p class="spooky-intro">Tap messages to pick them, then Play. The sign shows the picked messages one at a time in a shuffled order, with a 4 second pause between them, then shuffles again. No message plays twice in a row.</p>
+    <div class="spooky-bar">
+      <button type="button" class="btn" id="pickAll">Select all</button>
+      <button type="button" class="btn btn-quiet" id="pickNone">Clear</button>
+      <span id="pickCount" class="spooky-count" role="status"></span>
+    </div>
     <ol id="spookyList" class="spooky-list"></ol>
   </div>
 </div>
@@ -415,7 +437,7 @@
   "use strict";
 
   // mode: "message" shows the typed message, "halloween" plays every Halloween message shuffled, "sos" flashes SOS.
-  const DEFAULTS = Object.freeze({ message: "Testing 1, 2, 3", speed: 5, size: 5, board: "#39ff14", ink: "#000000", mode: "message" });
+  const DEFAULTS = Object.freeze({ message: "Testing 1, 2, 3", speed: 5, size: 5, board: "#39ff14", ink: "#000000", mode: "message", picked: null });
   const MODES = ["message", "halloween", "sos"];
   const STORE_KEY = "pocket-message-board:v1";
   const OLD_STORE_KEY = "led-message-board:v2"; // the same site's earlier name: its saved message carries over
@@ -433,6 +455,7 @@
   const UNLIT_RADIUS = 0.4;     // dark dots are small circles
   const FONT_STACK = '"Helvetica Neue", Helvetica, Arial, sans-serif';
   const QUICK = ["Testing 1, 2, 3", "Come on in!", "Sale today", "We're open"];
+  const HALLOWEEN_PAUSE_MS = 4000;  // blank board between Halloween messages, so each one reads on its own
   const HALLOWEEN = [
     "DON’T ANSWER IF IT CALLS YOUR NAME.",
     "YOU’RE NOT AS ALONE AS YOU THINK.",
@@ -527,6 +550,7 @@
       if (isHex(saved.board)) s.board = saved.board;
       if (isHex(saved.ink)) s.ink = saved.ink;
       if (MODES.includes(saved.mode)) s.mode = saved.mode;
+      if (Array.isArray(saved.picked)) s.picked = [...new Set(saved.picked.filter((i) => inRange(i, 0, 999)))];
     }
     return s;
   }
@@ -635,21 +659,6 @@
       if (r > bottom) bottom = r;
     }
     return bottom < 0 ? empty : { cols, data, top, bottom };
-  }
-
-  // Several messages as one strip, `gap` dark columns apart.
-  function joinStrips(parts, gap) {
-    parts = parts.filter((p) => p.cols);
-    const cols = parts.reduce((n, p) => n + p.cols, 0) + gap * Math.max(0, parts.length - 1);
-    const data = new Uint8Array(cols * TEXT_ROWS);
-    let x = 0, top = TEXT_ROWS, bottom = -1;
-    for (const p of parts) {
-      data.set(p.data, x * TEXT_ROWS);
-      x += p.cols + gap;
-      top = Math.min(top, p.top);
-      bottom = Math.max(bottom, p.bottom);
-    }
-    return bottom < 0 ? rasterize("") : { cols, data, top, bottom };
   }
 
   /* ---------- dot panels: the full-screen sign and the small preview in settings ---------- */
@@ -798,13 +807,9 @@
     if (settings.mode === "sos") {
       // SOS stands still in the middle; it flashes rather than scrolls.
       drawStrip(bits, Math.floor((b.cols - bits.cols) / 2));
-    } else if (settings.mode === "halloween" && playlist) {
-      // The shuffled round now playing, with the end of the last round and the start of the next either side.
-      const x0 = b.cols - step;
-      const gap = gapCols();
-      if (playlist.prev) drawStrip(playlist.prev, x0 - gap - playlist.prev.cols);
-      drawStrip(bits, x0);
-      drawStrip(playlist.next, x0 + bits.cols + gap);
+    } else if (settings.mode === "halloween") {
+      // One message at a time scrolls across; the board stays blank during the pause after it.
+      if (!pauseUntil) drawStrip(bits, b.cols - step);
     } else {
       // Copies of the message repeat every `cycle` columns; start with the first one not yet off the left edge.
       const cycle = cycleCols();
@@ -831,17 +836,22 @@
     if (settings.mode === "sos") {
       const lit = sosLitAt(now);
       if (lit !== sosLit) { sosLit = lit; redrawGrids(); }
+    } else if (settings.mode === "halloween") {
+      if (pauseUntil) {
+        // The pause is over: the next message comes in from the right edge.
+        if (now >= pauseUntil) { pauseUntil = 0; nextHalloween(); pos = 0; }
+      } else {
+        pos += dt * LETTERS_PER_SECOND[settings.speed - 1] * letterCols;
+        // The message has scrolled off the left edge: pause on a blank board.
+        if (pos >= main.cols + bits.cols) {
+          pauseUntil = now + HALLOWEEN_PAUSE_MS;
+          main.drawnStep = null;
+          preview.drawnStep = null;
+        }
+      }
     } else {
       pos += dt * LETTERS_PER_SECOND[settings.speed - 1] * letterCols;
-      if (settings.mode === "halloween" && playlist) {
-        // A shuffled round has scrolled past: the next round becomes the one playing and a new one is shuffled.
-        while (bits.cols && pos >= cycleCols()) {
-          pos -= cycleCols();
-          playlist.prev = bits;
-          bits = playlist.next;
-          playlist.next = shuffledRound();
-        }
-      } else if (bits.cols) {
+      if (bits.cols) {
         pos %= cycleCols(); // the picture repeats every cycle, so this changes nothing on screen
       }
     }
@@ -860,19 +870,45 @@
 
   /* ---------- Halloween play-all and SOS ---------- */
 
-  // Every Halloween message once, in a new random order. The first never repeats the one that ended the last round.
-  let lastPlayed = -1;
-  function shuffledRound() {
-    const order = HALLOWEEN.map((_, i) => i);
-    for (let i = order.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [order[i], order[j]] = [order[j], order[i]];
+  // The Halloween messages picked to play (all of them until some are unpicked).
+  const pickedList = () => (settings.picked || HALLOWEEN.map((_, i) => i)).filter((i) => i < HALLOWEEN.length);
+
+  // The dot rows every Halloween message fits in, so the letters stay one size from message to message.
+  let halloweenRows = null;
+  function halloweenBits(text) {
+    if (!halloweenRows) {
+      halloweenRows = { top: TEXT_ROWS, bottom: -1 };
+      for (const t of HALLOWEEN) {
+        const r = rasterize(t);
+        halloweenRows.top = Math.min(halloweenRows.top, r.top);
+        halloweenRows.bottom = Math.max(halloweenRows.bottom, r.bottom);
+      }
     }
-    if (order[0] === lastPlayed) [order[0], order[order.length - 1]] = [order[order.length - 1], order[0]];
-    lastPlayed = order[order.length - 1];
-    return joinStrips(order.map((i) => rasterize(HALLOWEEN[i])), gapCols());
+    return { ...rasterize(text), top: halloweenRows.top, bottom: halloweenRows.bottom };
   }
-  let playlist = null;  // { prev, next }: the rounds either side of the one playing (`bits`)
+
+  // Plays each picked message once in a random order, then shuffles again; a new round never starts with the
+  // message that just played.
+  let halloweenOn = false;
+  let queue = [];
+  let lastPlayed = -1;
+  let pauseUntil = 0;
+  function nextHalloween() {
+    const picked = pickedList();
+    queue = queue.filter((i) => picked.includes(i));
+    if (!queue.length) {
+      queue = [...picked];
+      for (let i = queue.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [queue[i], queue[j]] = [queue[j], queue[i]];
+      }
+      if (queue.length > 1 && queue[0] === lastPlayed) [queue[0], queue[queue.length - 1]] = [queue[queue.length - 1], queue[0]];
+    }
+    lastPlayed = queue.length ? queue.shift() : -1;
+    bits = lastPlayed < 0 ? rasterize("") : halloweenBits(HALLOWEEN[lastPlayed]);
+    main.drawnStep = null;
+    preview.drawnStep = null;
+  }
 
   let sosStart = performance.now();
   let sosLit = true;
@@ -898,22 +934,21 @@
     let shown;
     if (settings.mode === "sos") {
       bits = rasterize("SOS");
-      playlist = null;
+      halloweenOn = false;
       shown = "SOS, flashing";
     } else if (settings.mode === "halloween") {
-      if (!playlist) { lastPlayed = -1; bits = shuffledRound(); playlist = { prev: null, next: shuffledRound() }; }
-      shown = "all the Halloween messages, shuffled";
+      if (!halloweenOn) { halloweenOn = true; queue = []; lastPlayed = -1; pauseUntil = 0; nextHalloween(); }
+      shown = "the picked Halloween messages, shuffled";
     } else {
       bits = rasterize(settings.message);
-      playlist = null;
+      halloweenOn = false;
       shown = settings.message.trim() || "nothing yet";
     }
     stage.setAttribute("aria-label", `Sign showing ${shown}. Tap to change the message.`);
     const typed = settings.mode === "message";
     for (const b of quickBox.children) b.setAttribute("aria-pressed", String(typed && b.dataset.msg === settings.message));
-    for (const b of spookyList.querySelectorAll("button")) b.setAttribute("aria-pressed", String(typed && b.dataset.msg === settings.message));
     $("openSpooky").setAttribute("aria-pressed", String(settings.mode === "halloween"));
-    $("playSpooky").textContent = settings.mode === "halloween" ? "■ Stop" : "▶ Play all";
+    $("playSpooky").textContent = settings.mode === "halloween" ? "■ Stop" : "▶ Play";
     $("sos").setAttribute("aria-pressed", String(settings.mode === "sos"));
     $("sos").textContent = settings.mode === "sos" ? "Stop SOS" : "SOS";
     redrawGrids();
@@ -924,7 +959,7 @@
   function setMode(mode) {
     if (mode === settings.mode) return;
     settings.mode = mode;
-    playlist = null;
+    halloweenOn = false;
     sosStart = performance.now();
     sosLit = true;
     applyMessage();
@@ -1012,34 +1047,46 @@
     const b = document.createElement("button");
     b.type = "button";
     b.className = "spooky-item";
-    b.dataset.msg = text;
+    b.dataset.index = String(i);
+    const check = document.createElement("span");
+    check.className = "spooky-check";
+    check.textContent = "✓";
+    check.setAttribute("aria-hidden", "true");
     const num = document.createElement("span");
     num.className = "spooky-num";
     num.textContent = String(i + 1);
     const words = document.createElement("span");
     words.textContent = text;
-    b.append(num, words);
+    b.append(check, num, words);
     b.addEventListener("click", () => {
-      settings.message = text;
-      settings.mode = "message";
-      msgIn.value = text;
-      settings.board = HALLOWEEN_COLORS.board;
-      settings.ink = HALLOWEEN_COLORS.ink;
-      boardIn.value = settings.board;
-      inkIn.value = settings.ink;
-      applyColors();
-      applyMessage();
-      restartMessage();
-      saveSettings();
-      closeSpooky();
-      closeSheet();
+      const picked = pickedList();
+      setPicked(picked.includes(i) ? picked.filter((k) => k !== i) : [...picked, i]);
     });
     li.appendChild(b);
     spookyList.appendChild(li);
   });
+
+  function showPicks() {
+    const picked = pickedList();
+    for (const b of spookyList.querySelectorAll("button")) {
+      b.setAttribute("aria-pressed", String(picked.includes(Number(b.dataset.index))));
+    }
+    $("pickCount").textContent = picked.length ? `${picked.length} of ${HALLOWEEN.length} picked` : "Pick at least one message to play";
+    $("playSpooky").disabled = !picked.length && settings.mode !== "halloween";
+  }
+  function setPicked(list) {
+    settings.picked = list.sort((a, b) => a - b);
+    showPicks();
+    saveSettings();
+  }
+  $("pickAll").addEventListener("click", () => setPicked(HALLOWEEN.map((_, i) => i)));
+  $("pickNone").addEventListener("click", () => setPicked([]));
+  showPicks();
+
   $("openSpooky").addEventListener("click", openSpooky);
   $("playSpooky").addEventListener("click", () => {
-    if (settings.mode === "halloween") { setMode("message"); return; }
+    if (settings.mode === "halloween") { setMode("message"); showPicks(); return; }
+    if (!pickedList().length) return;
     settings.board = HALLOWEEN_COLORS.board;
     settings.ink = HALLOWEEN_COLORS.ink;
     boardIn.value = settings.board;
@@ -1221,6 +1268,7 @@
 
   resetBtn.addEventListener("click", () => {
     settings = { ...DEFAULTS };
+    showPicks();
     syncForm();
     applyColors();
     applyMessage();
