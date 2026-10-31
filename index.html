@@ -320,6 +320,13 @@
   }
   .spooky-item[aria-pressed="true"] { border-color: #00f0ff; color: #00f0ff; }
   .spooky-num { min-width: 2ch; font-variant-numeric: tabular-nums; color: #00f0ff; }
+  .mode-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn-sos { color: #ff2b2b; border-color: #ff2b2b; background: transparent; }
+  .btn-sos[aria-pressed="true"], .btn-spooky[aria-pressed="true"] { color: #0b0c0a; }
+  .btn-sos[aria-pressed="true"] { background: #ff2b2b; }
+  .btn-spooky[aria-pressed="true"] { background: #00f0ff; }
+  .btn-play { color: #0b0c0a; background: #00f0ff; border-color: #00f0ff; }
+  .spooky-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .spooky button:focus-visible { outline: 2px solid #00f0ff; outline-offset: 2px; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -352,7 +359,10 @@
       <label for="msg" class="label">Message</label>
       <input id="msg" name="msg" class="text-input" type="text" maxlength="200" spellcheck="false" enterkeyhint="done" placeholder="Type what the sign should say">
       <div id="quick" class="chips" role="group" aria-label="Quick messages"></div>
-      <button type="button" class="btn btn-spooky" id="openSpooky">🎃 Halloween message board</button>
+      <div class="mode-buttons">
+        <button type="button" class="btn btn-spooky" id="openSpooky" aria-pressed="false">🎃 Halloween message board</button>
+        <button type="button" class="btn btn-sos" id="sos" aria-pressed="false">SOS</button>
+      </div>
     </div>
 
     <div class="sliders">
@@ -390,9 +400,12 @@
   <div class="sheet-inner" role="dialog" aria-label="Halloween message board">
     <div class="sheet-head">
       <h2 class="brand">Halloween message board</h2>
-      <button type="button" class="btn" id="closeSpooky">Back</button>
+      <div class="spooky-actions">
+        <button type="button" class="btn btn-play" id="playSpooky">▶ Play all</button>
+        <button type="button" class="btn" id="closeSpooky">Back</button>
+      </div>
     </div>
-    <p class="spooky-intro">Tap a message to put it on the sign.</p>
+    <p class="spooky-intro">Play all scrolls through every message in a shuffled order, then shuffles again, with no message shown twice in a row. Or tap one message to show just that one.</p>
     <ol id="spookyList" class="spooky-list"></ol>
   </div>
 </div>
@@ -401,7 +414,9 @@
 (() => {
   "use strict";
 
-  const DEFAULTS = Object.freeze({ message: "Testing 1, 2, 3", speed: 5, size: 5, board: "#39ff14", ink: "#000000" });
+  // mode: "message" shows the typed message, "halloween" plays every Halloween message shuffled, "sos" flashes SOS.
+  const DEFAULTS = Object.freeze({ message: "Testing 1, 2, 3", speed: 5, size: 5, board: "#39ff14", ink: "#000000", mode: "message" });
+  const MODES = ["message", "halloween", "sos"];
   const STORE_KEY = "pocket-message-board:v1";
   const OLD_STORE_KEY = "led-message-board:v2"; // the same site's earlier name: its saved message carries over
   const MAX_CANVAS_PIXELS = 16000000;  // iOS Safari refuses canvases above about 16.7 million pixels
@@ -459,6 +474,12 @@
   ];
   // Halloween colors: ghost-cyan letters on a black board, the opposite of a red-lit room, so they stand out in it.
   const HALLOWEEN_COLORS = { board: "#050608", ink: "#00f0ff" };
+  // SOS flashes in Morse code (... --- ...): a white board with red letters when lit, dim red on black between flashes,
+  // so the letters can still be read. One Morse unit is 300 ms, under 2 flashes a second.
+  const SOS_UNIT_MS = 300;
+  const SOS_ON = { board: "#ffffff", ink: "#e00000" };
+  const SOS_OFF = { board: "#000000", ink: "#6a0000" };
+  const SOS_PATTERN = [1, 1, 1, 1, 1, -3, 3, 1, 3, 1, 3, -3, 1, 1, 1, 1, 1, -7]; // units; odd places and negatives are dark
   const PRESETS = [
     { name: "Neon green", board: "#39ff14", ink: "#000000" },
     { name: "Red LED", board: "#0c0c0e", ink: "#ff2b2b" },
@@ -505,6 +526,7 @@
       if (inRange(saved.size, 1, SIZES.length)) s.size = saved.size;
       if (isHex(saved.board)) s.board = saved.board;
       if (isHex(saved.ink)) s.ink = saved.ink;
+      if (MODES.includes(saved.mode)) s.mode = saved.mode;
     }
     return s;
   }
@@ -615,6 +637,21 @@
     return bottom < 0 ? empty : { cols, data, top, bottom };
   }
 
+  // Several messages as one strip, `gap` dark columns apart.
+  function joinStrips(parts, gap) {
+    parts = parts.filter((p) => p.cols);
+    const cols = parts.reduce((n, p) => n + p.cols, 0) + gap * Math.max(0, parts.length - 1);
+    const data = new Uint8Array(cols * TEXT_ROWS);
+    let x = 0, top = TEXT_ROWS, bottom = -1;
+    for (const p of parts) {
+      data.set(p.data, x * TEXT_ROWS);
+      x += p.cols + gap;
+      top = Math.min(top, p.top);
+      bottom = Math.max(bottom, p.bottom);
+    }
+    return bottom < 0 ? rasterize("") : { cols, data, top, bottom };
+  }
+
   /* ---------- dot panels: the full-screen sign and the small preview in settings ---------- */
 
   function makeBoard(gridId, dotsId, fillsScreen) {
@@ -668,6 +705,7 @@
     const share = b.fillsScreen ? SIZES[settings.size - 1] : 1;
     let pitch = (ah * share) / (used + 1); // +1 leaves half a dot row of board above and below
     if (b.fillsScreen) pitch = Math.min(pitch, aw / (letterCols * MIN_LETTERS_ACROSS));
+    if (settings.mode === "sos") pitch = Math.min(pitch, aw / (bits.cols + 2)); // SOS stands still, so all of it fits across
     b.pitch = pitch;
     b.cols = Math.max(1, Math.floor(aw / pitch + 1e-6));
     b.rows = Math.max(1, Math.floor(ah / pitch + 1e-6));
@@ -692,12 +730,19 @@
     renderNow();
   }
 
+  // The colors on screen now: the saved ones, or the SOS flash.
+  function colors() {
+    if (settings.mode === "sos") return sosLit ? SOS_ON : SOS_OFF;
+    return settings;
+  }
+
   function drawGrid(b) {
     const g = b.grid;
+    const col = colors();
     g.setTransform(b.dpr, 0, 0, b.dpr, 0, 0);
-    g.fillStyle = settings.board;
+    g.fillStyle = col.board;
     g.fillRect(0, 0, b.W, b.H);
-    g.fillStyle = mix(settings.board, settings.ink, 0.1);
+    g.fillStyle = mix(col.board, col.ink, 0.1);
     g.beginPath();
     const radius = b.pitch * UNLIT_RADIUS;
     const tau = Math.PI * 2;
@@ -729,28 +774,44 @@
     if (!bits.cols || !b.cols) return;
 
     ctx.setTransform(b.dpr, 0, 0, b.dpr, 0, 0);
-    ctx.fillStyle = settings.ink;
+    ctx.fillStyle = colors().ink;
     ctx.beginPath();
     const p = b.pitch;
     const size = p * LIT_SIZE;
     const inset = (p - size) / 2;
     const corner = size * 0.2;
-    const cycle = cycleCols();
-    // Copies of the message repeat every `cycle` columns; start with the first one not yet off the left edge.
-    for (let k = Math.floor((step - b.cols - bits.cols) / cycle) + 1; ; k++) {
-      const x0 = b.cols - step + k * cycle;
-      if (x0 >= b.cols) break;
+    const drawStrip = (strip, x0) => {
+      if (!strip || x0 >= b.cols || x0 + strip.cols <= 0) return;
       const from = Math.max(0, -x0);
-      const to = Math.min(bits.cols, b.cols - x0);
+      const to = Math.min(strip.cols, b.cols - x0);
       for (let c = from; c < to; c++) {
         const base = c * TEXT_ROWS;
         const x = b.ox + (x0 + c) * p + inset;
         for (let r = bits.top; r <= bits.bottom; r++) {
-          if (!bits.data[base + r]) continue;
+          if (!strip.data[base + r]) continue;
           const row = b.textTop + r;
           if (row < 0 || row >= b.rows) continue;
           roundSquare(ctx, x, b.oy + row * p + inset, size, corner);
         }
+      }
+    };
+    if (settings.mode === "sos") {
+      // SOS stands still in the middle; it flashes rather than scrolls.
+      drawStrip(bits, Math.floor((b.cols - bits.cols) / 2));
+    } else if (settings.mode === "halloween" && playlist) {
+      // The shuffled round now playing, with the end of the last round and the start of the next either side.
+      const x0 = b.cols - step;
+      const gap = gapCols();
+      if (playlist.prev) drawStrip(playlist.prev, x0 - gap - playlist.prev.cols);
+      drawStrip(bits, x0);
+      drawStrip(playlist.next, x0 + bits.cols + gap);
+    } else {
+      // Copies of the message repeat every `cycle` columns; start with the first one not yet off the left edge.
+      const cycle = cycleCols();
+      for (let k = Math.floor((step - b.cols - bits.cols) / cycle) + 1; ; k++) {
+        const x0 = b.cols - step + k * cycle;
+        if (x0 >= b.cols) break;
+        drawStrip(bits, x0);
       }
     }
     ctx.fill();
@@ -767,8 +828,23 @@
     // Time-based, so the speed holds on slow frames; capped so waking the iPad doesn't jump far ahead.
     const dt = Math.min(1, Math.max(0, (now - last) / 1000));
     last = now;
-    pos += dt * LETTERS_PER_SECOND[settings.speed - 1] * letterCols;
-    if (bits.cols) pos %= cycleCols(); // the picture repeats every cycle, so this changes nothing on screen
+    if (settings.mode === "sos") {
+      const lit = sosLitAt(now);
+      if (lit !== sosLit) { sosLit = lit; redrawGrids(); }
+    } else {
+      pos += dt * LETTERS_PER_SECOND[settings.speed - 1] * letterCols;
+      if (settings.mode === "halloween" && playlist) {
+        // A shuffled round has scrolled past: the next round becomes the one playing and a new one is shuffled.
+        while (bits.cols && pos >= cycleCols()) {
+          pos -= cycleCols();
+          playlist.prev = bits;
+          bits = playlist.next;
+          playlist.next = shuffledRound();
+        }
+      } else if (bits.cols) {
+        pos %= cycleCols(); // the picture repeats every cycle, so this changes nothing on screen
+      }
+    }
     const step = Math.floor(pos);
     if (step !== main.drawnStep) render(main, step);
     if (sheetOpen && step !== preview.drawnStep) render(preview, step);
@@ -782,13 +858,78 @@
     preview.drawnStep = null;
   }
 
+  /* ---------- Halloween play-all and SOS ---------- */
+
+  // Every Halloween message once, in a new random order. The first never repeats the one that ended the last round.
+  let lastPlayed = -1;
+  function shuffledRound() {
+    const order = HALLOWEEN.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    if (order[0] === lastPlayed) [order[0], order[order.length - 1]] = [order[order.length - 1], order[0]];
+    lastPlayed = order[order.length - 1];
+    return joinStrips(order.map((i) => rasterize(HALLOWEEN[i])), gapCols());
+  }
+  let playlist = null;  // { prev, next }: the rounds either side of the one playing (`bits`)
+
+  let sosStart = performance.now();
+  let sosLit = true;
+  const SOS_TOTAL = SOS_PATTERN.reduce((n, u) => n + Math.abs(u), 0);
+  function sosLitAt(now) {
+    let t = ((now - sosStart) / SOS_UNIT_MS) % SOS_TOTAL;
+    for (let i = 0; i < SOS_PATTERN.length; i++) {
+      const u = Math.abs(SOS_PATTERN[i]);
+      if (t < u) return SOS_PATTERN[i] > 0 && i % 2 === 0;
+      t -= u;
+    }
+    return false;
+  }
+
+  function redrawGrids() {
+    for (const b of [main, preview]) {
+      if (b.cols) drawGrid(b);
+      b.drawnStep = null;
+    }
+  }
+
   function applyMessage() {
-    bits = rasterize(settings.message);
-    const shown = settings.message.trim() || "nothing yet";
-    stage.setAttribute("aria-label", `Scrolling sign: ${shown}. Tap to change the message.`);
-    for (const b of quickBox.children) b.setAttribute("aria-pressed", String(b.dataset.msg === settings.message));
-    for (const b of spookyList.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.msg === settings.message));
+    let shown;
+    if (settings.mode === "sos") {
+      bits = rasterize("SOS");
+      playlist = null;
+      shown = "SOS, flashing";
+    } else if (settings.mode === "halloween") {
+      if (!playlist) { lastPlayed = -1; bits = shuffledRound(); playlist = { prev: null, next: shuffledRound() }; }
+      shown = "all the Halloween messages, shuffled";
+    } else {
+      bits = rasterize(settings.message);
+      playlist = null;
+      shown = settings.message.trim() || "nothing yet";
+    }
+    stage.setAttribute("aria-label", `Sign showing ${shown}. Tap to change the message.`);
+    const typed = settings.mode === "message";
+    for (const b of quickBox.children) b.setAttribute("aria-pressed", String(typed && b.dataset.msg === settings.message));
+    for (const b of spookyList.querySelectorAll("button")) b.setAttribute("aria-pressed", String(typed && b.dataset.msg === settings.message));
+    $("openSpooky").setAttribute("aria-pressed", String(settings.mode === "halloween"));
+    $("playSpooky").textContent = settings.mode === "halloween" ? "■ Stop" : "▶ Play all";
+    $("sos").setAttribute("aria-pressed", String(settings.mode === "sos"));
+    $("sos").textContent = settings.mode === "sos" ? "Stop SOS" : "SOS";
+    redrawGrids();
     layoutAll();
+  }
+
+  // Switches what the sign shows and starts it from the beginning.
+  function setMode(mode) {
+    if (mode === settings.mode) return;
+    settings.mode = mode;
+    playlist = null;
+    sosStart = performance.now();
+    sosLit = true;
+    applyMessage();
+    restartMessage();
+    saveSettings();
   }
 
   function applyColors() {
@@ -798,10 +939,7 @@
       const on = b.dataset.board === settings.board.toLowerCase() && b.dataset.ink === settings.ink.toLowerCase();
       b.setAttribute("aria-pressed", String(on));
     }
-    for (const b of [main, preview]) {
-      if (b.cols) drawGrid(b);
-      b.drawnStep = null;
-    }
+    redrawGrids();
     renderNow();
   }
 
@@ -815,6 +953,7 @@
     b.dataset.msg = text;
     b.addEventListener("click", () => {
       settings.message = text;
+      settings.mode = "message";
       msgIn.value = text;
       applyMessage();
       restartMessage();
@@ -882,6 +1021,7 @@
     b.append(num, words);
     b.addEventListener("click", () => {
       settings.message = text;
+      settings.mode = "message";
       msgIn.value = text;
       settings.board = HALLOWEEN_COLORS.board;
       settings.ink = HALLOWEEN_COLORS.ink;
@@ -898,6 +1038,22 @@
     spookyList.appendChild(li);
   });
   $("openSpooky").addEventListener("click", openSpooky);
+  $("playSpooky").addEventListener("click", () => {
+    if (settings.mode === "halloween") { setMode("message"); return; }
+    settings.board = HALLOWEEN_COLORS.board;
+    settings.ink = HALLOWEEN_COLORS.ink;
+    boardIn.value = settings.board;
+    inkIn.value = settings.ink;
+    applyColors();
+    setMode("halloween");
+    closeSpooky();
+    closeSheet();
+  });
+  $("sos").addEventListener("click", () => {
+    if (settings.mode === "sos") { setMode("message"); return; }
+    setMode("sos");
+    closeSheet();
+  });
   $("closeSpooky").addEventListener("click", () => { closeSpooky(); $("openSpooky").focus({ preventScroll: true }); });
 
   const sizeText = (level) => (SIZES[level - 1] === 1 ? "Fills the screen" : `${Math.round(SIZES[level - 1] * 100)}% of the screen`);
@@ -917,7 +1073,7 @@
   function openSheet() {
     if (sheetOpen) return;
     sheetOpen = true;
-    messageAtOpen = settings.message;
+    messageAtOpen = settings.mode + settings.message;
     syncForm();
     note.textContent = "";
     sheet.classList.add("is-open");
@@ -934,7 +1090,7 @@
     sheet.classList.remove("is-open");
     sheet.setAttribute("aria-hidden", "true");
     if (document.activeElement && sheet.contains(document.activeElement)) document.activeElement.blur();
-    if (settings.message !== messageAtOpen) restartMessage();
+    if (settings.mode + settings.message !== messageAtOpen) restartMessage();
     renderNow();
     stage.focus({ preventScroll: true });
   }
@@ -1031,6 +1187,7 @@
 
   msgIn.addEventListener("input", () => {
     settings.message = msgIn.value.slice(0, 200);
+    settings.mode = "message";
     applyMessage();
     saveSettings();
   });
