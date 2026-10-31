@@ -291,9 +291,9 @@
   .sheet input:focus-visible { outline: 2px solid var(--neon); outline-offset: 2px; }
 
   /* Halloween message board: a list of spooky messages, opened from the settings */
-  .btn-spooky { justify-self: start; color: #ff7a00; border-color: #ff7a00; background: transparent; }
+  .btn-spooky { justify-self: start; color: #00f0ff; border-color: #00f0ff; background: transparent; }
   .spooky { z-index: 20; background: #121114; }
-  .spooky .brand { color: #ff7a00; }
+  .spooky .brand { color: #00f0ff; }
   .spooky-intro { margin: 0; font-size: 15px; color: var(--muted); }
   .spooky-list {
     display: grid;
@@ -318,9 +318,9 @@
     border-radius: 12px;
     cursor: pointer;
   }
-  .spooky-item[aria-pressed="true"] { border-color: #ff7a00; color: #ff7a00; }
-  .spooky-num { min-width: 2ch; font-variant-numeric: tabular-nums; color: #ff7a00; }
-  .spooky button:focus-visible { outline: 2px solid #ff7a00; outline-offset: 2px; }
+  .spooky-item[aria-pressed="true"] { border-color: #00f0ff; color: #00f0ff; }
+  .spooky-num { min-width: 2ch; font-variant-numeric: tabular-nums; color: #00f0ff; }
+  .spooky button:focus-visible { outline: 2px solid #00f0ff; outline-offset: 2px; }
 
   @media (prefers-reduced-motion: reduce) {
     .sheet, .sheet.is-open, .hint { transition: none; }
@@ -457,6 +457,8 @@
     "MAYBE YOU NEVER WOKE UP.",
     "WHAT IF DEATH IS JUST ANOTHER DOOR?",
   ];
+  // Halloween colors: ghost-cyan letters on a black board, the opposite of a red-lit room, so they stand out in it.
+  const HALLOWEEN_COLORS = { board: "#050608", ink: "#00f0ff" };
   const PRESETS = [
     { name: "Neon green", board: "#39ff14", ink: "#000000" },
     { name: "Red LED", board: "#0c0c0e", ink: "#ff2b2b" },
@@ -464,6 +466,7 @@
     { name: "Green LED", board: "#0c0c0e", ink: "#39ff14" },
     { name: "Hot pink", board: "#0c0c0e", ink: "#ff3caa" },
     { name: "Yellow", board: "#ffe600", ink: "#000000" },
+    { name: "Ghost cyan", ...HALLOWEEN_COLORS },
   ];
 
   const $ = (id) => document.getElementById(id);
@@ -880,6 +883,11 @@
     b.addEventListener("click", () => {
       settings.message = text;
       msgIn.value = text;
+      settings.board = HALLOWEEN_COLORS.board;
+      settings.ink = HALLOWEEN_COLORS.ink;
+      boardIn.value = settings.board;
+      inkIn.value = settings.ink;
+      applyColors();
       applyMessage();
       restartMessage();
       saveSettings();
