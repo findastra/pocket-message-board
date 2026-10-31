@@ -290,6 +290,38 @@
   .sheet button:focus-visible,
   .sheet input:focus-visible { outline: 2px solid var(--neon); outline-offset: 2px; }
 
+  /* Halloween message board: a list of spooky messages, opened from the settings */
+  .btn-spooky { justify-self: start; color: #ff7a00; border-color: #ff7a00; background: transparent; }
+  .spooky { z-index: 20; background: #121114; }
+  .spooky .brand { color: #ff7a00; }
+  .spooky-intro { margin: 0; font-size: 15px; color: var(--muted); }
+  .spooky-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .spooky-item {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    width: 100%;
+    min-height: 46px;
+    padding: 12px 14px;
+    font: 600 16px/1.3 var(--font-ui);
+    text-align: left;
+    color: var(--text);
+    background: #1d1b20;
+    border: 1px solid #3a3440;
+    border-radius: 12px;
+    cursor: pointer;
+  }
+  .spooky-item[aria-pressed="true"] { border-color: #ff7a00; color: #ff7a00; }
+  .spooky-num { min-width: 2ch; font-variant-numeric: tabular-nums; color: #ff7a00; }
+  .spooky button:focus-visible { outline: 2px solid #ff7a00; outline-offset: 2px; }
+
   @media (prefers-reduced-motion: reduce) {
     .sheet, .sheet.is-open, .hint { transition: none; }
   }
@@ -320,6 +352,7 @@
       <label for="msg" class="label">Message</label>
       <input id="msg" name="msg" class="text-input" type="text" maxlength="200" spellcheck="false" enterkeyhint="done" placeholder="Type what the sign should say">
       <div id="quick" class="chips" role="group" aria-label="Quick messages"></div>
+      <button type="button" class="btn btn-spooky" id="openSpooky">🎃 Halloween message board</button>
     </div>
 
     <div class="sliders">
@@ -353,6 +386,17 @@
   </form>
 </div>
 
+<div id="spooky" class="sheet spooky" aria-hidden="true">
+  <div class="sheet-inner" role="dialog" aria-label="Halloween message board">
+    <div class="sheet-head">
+      <h2 class="brand">Halloween message board</h2>
+      <button type="button" class="btn" id="closeSpooky">Back</button>
+    </div>
+    <p class="spooky-intro">Tap a message to put it on the sign.</p>
+    <ol id="spookyList" class="spooky-list"></ol>
+  </div>
+</div>
+
 <script>
 (() => {
   "use strict";
@@ -374,6 +418,45 @@
   const UNLIT_RADIUS = 0.4;     // dark dots are small circles
   const FONT_STACK = '"Helvetica Neue", Helvetica, Arial, sans-serif';
   const QUICK = ["Testing 1, 2, 3", "Come on in!", "Sale today", "We're open"];
+  const HALLOWEEN = [
+    "DON’T ANSWER IF IT CALLS YOUR NAME.",
+    "YOU’RE NOT AS ALONE AS YOU THINK.",
+    "THE LAST PERSON WHO READ THIS DISAPPEARED.",
+    "EVERYTHING IS NORMAL. THAT’S THE PROBLEM.",
+    "THEY’RE HERE.",
+    "WHAT’S YOUR FAVORITE SCARY MOVIE?",
+    "DON’T OPEN THE DOOR.",
+    "IT FOLLOWS.",
+    "WE ALL FLOAT DOWN HERE.",
+    "TURN AROUND.",
+    "THERE ARE MORE OF US.",
+    "YOU LEFT THE DOOR OPEN.",
+    "DARKNESS IS PATIENT.",
+    "THE UNKNOWN IS OLDER THAN FEAR.",
+    "YOU WEREN’T THE FIRST.",
+    "IT WASN’T A DREAM.",
+    "DON’T TRUST THE QUIET.",
+    "YOU’RE NOT SUPPOSED TO BE HERE.",
+    "IT KNOWS WHEN YOU’RE LOOKING.",
+    "THERE’S SOMETHING IN THE WALLS.",
+    "WE’VE BEEN EXPECTING YOU.",
+    "YOU HEARD THE WHISPER TOO.",
+    "SOMETHING IS MISSING.",
+    "THE SHADOWS ARE GETTING CLOSER.",
+    "DON’T LET IT SEE YOU.",
+    "IT REMEMBERS EVERYTHING.",
+    "THE ENDING HAS ALREADY HAPPENED.",
+    "YOU CAN’T HIDE FROM WHAT YOU ARE.",
+    "IT’S BEEN STANDING THERE ALL NIGHT.",
+    "THE LAST WARNING WASN’T FOR YOU.",
+    "WE NEVER LEFT.",
+    "THE VOICE SOUNDS JUST LIKE YOU.",
+    "YOU SHOULD HAVE STAYED ASLEEP.",
+    "SOMETHING ANSWERED FROM UNDERNEATH.",
+    "NOT EVERYONE WHO KNOCKS IS ALIVE.",
+    "MAYBE YOU NEVER WOKE UP.",
+    "WHAT IF DEATH IS JUST ANOTHER DOOR?",
+  ];
   const PRESETS = [
     { name: "Neon green", board: "#39ff14", ink: "#000000" },
     { name: "Red LED", board: "#0c0c0e", ink: "#ff2b2b" },
@@ -401,6 +484,8 @@
   const resetBtn = $("reset");
   const note = $("note");
   const hint = $("hint");
+  const spooky = $("spooky");
+  const spookyList = $("spookyList");
 
   /* ---------- settings ---------- */
 
@@ -699,6 +784,7 @@
     const shown = settings.message.trim() || "nothing yet";
     stage.setAttribute("aria-label", `Scrolling sign: ${shown}. Tap to change the message.`);
     for (const b of quickBox.children) b.setAttribute("aria-pressed", String(b.dataset.msg === settings.message));
+    for (const b of spookyList.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.msg === settings.message));
     layoutAll();
   }
 
@@ -760,6 +846,51 @@
     });
     presetBox.appendChild(b);
   });
+
+  /* ---------- Halloween message board ---------- */
+
+  let spookyOpen = false;
+  function openSpooky() {
+    spookyOpen = true;
+    spooky.classList.add("is-open");
+    spooky.removeAttribute("aria-hidden");
+    spooky.scrollTop = 0;
+    $("closeSpooky").focus({ preventScroll: true });
+  }
+  function closeSpooky() {
+    if (!spookyOpen) return;
+    spookyOpen = false;
+    spooky.classList.remove("is-open");
+    spooky.setAttribute("aria-hidden", "true");
+    if (document.activeElement && spooky.contains(document.activeElement)) document.activeElement.blur();
+  }
+
+  HALLOWEEN.forEach((text, i) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "spooky-item";
+    b.dataset.msg = text;
+    const num = document.createElement("span");
+    num.className = "spooky-num";
+    num.textContent = String(i + 1);
+    const words = document.createElement("span");
+    words.textContent = text;
+    b.append(num, words);
+    b.addEventListener("click", () => {
+      settings.message = text;
+      msgIn.value = text;
+      applyMessage();
+      restartMessage();
+      saveSettings();
+      closeSpooky();
+      closeSheet();
+    });
+    li.appendChild(b);
+    spookyList.appendChild(li);
+  });
+  $("openSpooky").addEventListener("click", openSpooky);
+  $("closeSpooky").addEventListener("click", () => { closeSpooky(); $("openSpooky").focus({ preventScroll: true }); });
 
   const sizeText = (level) => (SIZES[level - 1] === 1 ? "Fills the screen" : `${Math.round(SIZES[level - 1] * 100)}% of the screen`);
 
@@ -876,6 +1007,7 @@
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSheet(); }
   });
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && spookyOpen) { closeSpooky(); $("openSpooky").focus({ preventScroll: true }); return; }
     if (e.key === "Escape" && sheetOpen) closeSheet();
     // On a computer, F puts the sign in full screen and takes it out again (Escape also leaves full screen).
     if ((e.key === "f" || e.key === "F") && !sheetOpen && canFullscreen && !e.ctrlKey && !e.metaKey && !e.altKey) {
